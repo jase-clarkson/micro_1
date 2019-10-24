@@ -1,0 +1,408 @@
+\documentclass[twoside]{article}
+
+\usepackage{aistats2020}
+\DeclareMathOperator*{\argmax}{argmax} 
+
+\usepackage[comma,authoryear, round]{natbib}
+%\usepackage{todonotes}
+\usepackage[font=small]{caption}
+\usepackage[font=small]{subcaption}
+\captionsetup{compatibility=false}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{centernot}
+\renewcommand{\labelitemii}{$\star$}
+\DeclarePairedDelimiter\ceil{\lceil}{\rceil}
+\DeclarePairedDelimiter\floor{\lfloor}{\rfloor}
+\newcommand{\blank}[1]{\hspace*{#1}}
+
+
+\begin{document}
+
+
+\twocolumn[
+
+\aistatstitle{Diagnostic tools for approximate Bayes}
+
+%\todo{Figure out author list}
+\aistatsauthor{ Clarkson, Jason \And Liu, Bryan \And  Monod, Mélodie }
+
+\aistatsaddress{ Oxford \And  Imperial \And Imperial } ]
+
+\begin{abstract}
+  The Abstract paragraph should be indented 0.25 inch (1.5 picas) on
+  both left and right-hand margins. Use 10~point type, with a vertical
+  spacing of 11~points. The \textbf{Abstract} heading must be centered,
+  bold, and in point size 12. Two line spaces precede the
+  Abstract. The Abstract must be limited to one paragraph.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+%\todo[inline]{Some intro to Bayesian inference and computation} 
+
+%\todo[inline]{Some intro on variables notation}
+% Game rules
+Consider the usual objects in Bayesian inference: a prior distribution $\phi \sim \pi(\cdot)$, and a posterior distribution $\pi(\cdot | y)$ given an observed data~$y$ generated from $p(\cdot| \phi)$. We aim to do inference on the posterior density which describes how the latent variables vary, conditioned on a set of observations $y$. Often the posterior distribution is analytically intractable, and can only be estimated. Thus, we seek to approximate the posterior. As model and algorithms become more complex, the need to verify the correctness of their computation mounts.
+% via one of many of the following steps:
+% \begin{enumerate}
+%     \itemsep-1mm
+%     \item Sample a ground truth from the prior: $\phi \sim \pi(\cdot)$, 
+%     \item Simulate data point(s) with the corresponding data generation process with the ground truth: ${y \sim p(\cdot | \phi)}$, and
+%     \item Obtain a sample for the estimated posterior given the data $\theta \sim \tilde{\pi}( \cdot | y)$.
+% \end{enumerate}
+
+
+% Such need is further stressed by the use of Approximate Bayesian Computation (ABC), where the likelihood is simulated (and hence an approximate) and carries an extra source of uncertainty. The uncertainty may mask inaccuracies introduced by misspecified model or erroneous steps in computation. \todo{Bryan: Is this true? If so citation needed}
+
+% objective of the report
+Let's assume that one has formulated a model (i.e., mathematically defined beliefs about unknown parameter $\theta$ and generative model). Several options for inferring the posterior are available. They include classical methods such as Markov chain Monte Carlo (MCMC) or faster under model complexity, but less-studied methods, Variational Inference (VI). While the objective, approximating the posterior, remains the same, the procedure to achieve it differs. In this report, we present three diagnostics to evaluate the quality of the Bayes posterior approximation from either an MCMC or a VI. One should note that the diagnostics do not test if the computational methods have converged. This is assumed and on the responsibility of the scientist.
+
+% Running example
+Throughout the report, we use as toy example a Bayesian linear regression, where the data are generated as:
+\begin{align}
+    & \beta \sim \mathcal{N}(0, 10^2),\\
+    & \alpha \sim \mathcal{N}(0, 10^2),\\
+    & y \sim \mathcal{N}(\alpha + \beta x, 1.2^2),
+\end{align}
+where $x$ is some specified covariate. We can then build a Bayesian model to estimate the posterior for $\beta$ and $\alpha$ given some simulated data.
+
+
+
+\section{Related concepts}
+\subsection{Markov Chain Monte Carlo}
+In Markov Chain Monte Carlo (MCMC), we sample from an ergotic chain to collect samples from a stationary distribution that approximates the posterior \citep{Robert:2004}. 
+
+\subsection{Variational Inference}
+Variational inference (VI) consider a family of simple densities and find the member closest to the posterior. Specifically, it optimizes a loss function to obtain density $q(\theta | \phi)$, parametrized by $\phi$, which is the closest to the posterior. This turns approximate inference into optimization \citep{Variational_Inference_Review:2017}. Closeness is measured by Kullback-Leibler (KL) divergence defined as, 
+\begin{align}
+    \text{KL}\big(q(\theta|\phi) || p(\theta|y)\big) = \int_{\Theta} \textrm{log} \; \frac{q(\theta|\phi)} {\pi(\theta| y)}  \; q(\theta|\phi) d\theta
+\end{align}
+Minimizing the KL divergence directly is not possible because of the potentially intractable normalization constant $p(y)$. Instead, it is equivalent to maximizing the evidence lower bound (ELBO):
+\begin{align}
+    \text{ELBO}(\phi) &= \int_{\Theta} \textrm{log} \; \frac {p(\theta, y)} {q(\theta|\phi)} \; q(\theta|\phi) d\theta \\
+    &= \int_{\Theta} \textrm{log} \; p(y | \theta) q(\theta|\phi) d\theta -  \text{KL}\big(q(\theta|\phi) || \pi(\theta)\big)
+\end{align}
+VI then solves
+\begin{align}
+  \phi^* &= \argmax_{\phi} \; \text{ELBO}(\phi), \nonumber\\
+  \textrm{s.t.} \; & \textrm{supp}(q(\theta|\phi)) \subseteq  \textrm{supp}(p(\theta|y)).
+\end{align}
+where the second line specifies the support matching constraint implied in the KL divergence. By maximizing the ELBO, we encourage the optimization process to choose a candidate distribution which (1) explains the observed data well and (2) is similar to the prior distribution.
+
+
+\subsection{Importance Sampling} \label{sec:is}
+Let $h$ be a density from a distribution that is absolutely continuous with $\pi$. Then one can write,
+\begin{align}
+    \pi(x) &= \frac{w(x)h(x)}{\int w(x)h(x)dx}, \\
+    \text{with} \quad w(x) &= \frac{\gamma(x)}{h(x)}, 
+\end{align}
+where $\gamma$ is the un-normalized distribution of $\pi$. We say that $h$ is the importance distribution. Assume we can obtain $n$ i.i.d samples $X_i \sim h$, then we approximate,
+\begin{align}
+    \hat{\pi}(\varphi(X)) &= \sum_{i = 1}^n W_i \varphi(X_i) \quad\text{and} \\
+    \hat{\pi}(dx) &= \sum_{i = 1}^n W_i \delta_{X_i}(dx),
+\end{align}
+where $W_i = \frac{w(x_i)}{\sum_{j=1}^n w(x_j)}$. 
+
+\section{Simulation-based Calibration}
+\label{sec:sbc}
+
+\begin{figure*}
+\vspace*{0pt}
+\begin{center}
+  \includegraphics[width=0.5\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_all_params.pdf}
+\end{center}
+\vspace*{-12pt}
+\caption{The rank distribution produced by  Simulation-Based Calibration (SBC) when the model is specified correctly. Both the model and data generating process assumes $\beta, \alpha \sim \mathcal{N}(0, 10^2)$, and the latter generates five data points under $y \sim \mathcal{N}(X\beta + \alpha, 1.2^2)$ for some one-dimensional covariate $X$ before we fit the model to obtain a posterior. 10,000 rank samples are generated in the procedure, with each prior sample compared against 100 posterior samples to obtain one rank sample. The grey shaded area represents the 99\% interval expected from a uniform histogram.}
+\label{fig:sbc_linreg_all_params}
+\end{figure*}
+
+We begin by introducing Simulation-Based Calibration (SBC), a diagnostic procedure that evaluates whether posterior samples generated from any Bayesian algorithms are reflective of the exact posterior distribution.
+
+% Key observation - self-consistency between data-averaged posterior and prior
+Consider the Bayesian computation example in Section~\ref{sec:introduction}, where we compute samples from the prior~$\phi \sim \pi(\cdot)$, likelihood conditioned on the sampled prior~${y \sim p(\cdot | \phi)}$, and the estimated posterior~${\theta \sim \tilde{\pi}( \cdot | y)}$. \citep{cook2006validation} observed the self-consistency between an data-averaged posterior\footnote{Average of the posteriors w.r.t. to the generated data} and the prior distribution: assuming the posterior ~$\pi(\cdot|y)$ is exact, integrating it over all possible sampled data (likelihood) and ground truth (prior) should return the prior distribution:
+\begin{align}
+    \pi(\theta) = \int \pi(\theta|y) p(y|\phi) \pi(\phi) \,\textrm{d}y \textrm{d}\phi .
+    \label{eq:self_consistency}
+\end{align}
+
+% Self-consistent property implies uniform rank distribution of prior sample relative to posterior samples
+\citep{talts2018validating} further proved that the self-consistency implies that the rank\footnote{\# of posterior samples less than the prior sample.} of the prior sample~$\phi$ relative to the exact posterior samples~${\{\theta_1, \cdots, \theta_L\} \sim \pi(\cdot | y)}$ will follow a discrete uniform distribution, as they are identically distributed.
+They argue that the observation can be used to guard against inaccurate computation of the posterior or mis-implemented models during Bayesian analyses. The errors will lead to a discrepancy between the data-averaged (estimated) posterior and the prior distributions, and hence non-uniformity in the ranks.
+
+% Simulation-based calibrations
+The observations leads to the development of SBC: In each iteration we draw, in turn, 1) a prior sample, 2) simulated data conditioned on the prior sample, and 3) $L$ posterior samples conditioned on the data. We then compute the rank of the prior sample relative to the posterior samples as described above. This is repeated $N$ times to obtain an empirical distribution of the ranks for each parameter of interest.\footnote{For multi-dimensional inference, we inspect the rank distribution of each parameter in turn, potentially reusing the computed posterior samples.} Talts et al. suggested visualising the rank distributions with histograms, where a symmetric $\cap$-shape, a symmetric $\cup$-shape, and asymmetry in the rank distributions indicates the data-averaged posterior is overdispersed, underdispersed, and biased relative to the prior distribution respectively.
+
+\subsection{Implementation \& reproduction of key results}
+
+% Implementation on R work
+We implemented the modified SBC (Algorithm 2 in \citep{talts2018validating}\footnote{The modified procedure aims to combat autocorrelation in the posterior samples generated in the underlying MCMC chain by uniformly thinning the samples. This generally removes spikes in the histogram that is not caused by model misspecification.}) in \texttt{R},\footnote{Using \texttt{rstan} to obtain posterior samples.} and run it using the linear regression example in Section~\ref{sec:introduction}. In the case where the prior is correctly specified in the inference model (i.e. same as that in the data generation process), we are able to obtain a similar histogram to that shown in the original work (see Figure~\ref{fig:sbc_linreg_all_params}).
+
+Moreover, we are able to reproduce the~$\cup$-shape and asymmetric rank distributions featured in the original work in Figure~\ref{fig:sbc_linreg_different_beta}. This is obtained when the prior we used to build our posterior (model prior) is severely underdispersed and biased, respectively, than that used to generate prior samples for the linear regression example (data prior). This leads to an underdispersed and biased data-averaged posterior even in the presence of the data.
+
+\begin{figure*}
+\vspace*{-6pt}
+\begin{center}
+\begin{subfigure}[t]{.24\textwidth}
+  \includegraphics[width=\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_beta.pdf}
+  \vspace*{-12pt}
+  \caption{$\beta \sim \mathcal{N}(0, 10^2)$}
+  \label{fig:sbc_linreg_beta}
+\end{subfigure}
+\hspace*{.001\textwidth}
+\begin{subfigure}[t]{.24\textwidth}
+  \includegraphics[width=\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_underdispersed2_beta.pdf}
+  \vspace*{-12pt}
+  \caption{$\beta \sim \mathcal{N}(0, 2^2)$}
+  \label{fig:sbc_linreg_underdispersed2_beta}
+\end{subfigure}
+\hspace*{.001\textwidth}
+\begin{subfigure}[t]{.24\textwidth}
+  \includegraphics[width=\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_overdispersed_beta.pdf}
+  \vspace*{-12pt}
+  \caption{$\beta \sim \mathcal{N}(0, 100^2)$}
+  \label{fig:sbc_linreg_overdispersed_beta}
+\end{subfigure}
+\hspace*{.001\textwidth}
+\begin{subfigure}[t]{.24\textwidth}
+  \includegraphics[width=\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_biased_beta.pdf}
+  \vspace*{-12pt}
+  \caption{$\beta \sim \mathcal{N}(100, 10^2)$}
+  \label{fig:sbc_linreg_biased_beta}
+\end{subfigure}
+\end{center}
+\vspace*{-6pt}
+\caption{The rank distributions under Simulation-Based Calibration (SBC) for one parameter, when the prior used to build our posterior (model prior) is the same and different than the one used to generate the data for that particular parameter. We define the data generating process as $\beta, \alpha \sim \mathcal{N}(0, 10^2)$ and ${y_{1:5} \sim \mathcal{N}(X\beta + \alpha, 1.2^2)}$, with~$X$, a one-dimensional covariate, taking five different values. We modify the model prior by changing the distribution of $\beta$ as shown in the sub-captions, while keeping $\alpha$. SBC is able to produce a symmetric $\cup$-shape and asymmetric rank distribution when the model prior is underdispersed and biased respectively. In the case where the model prior is overdispersed, SBC returns a uniform rank distribution.}
+\label{fig:sbc_linreg_different_beta}
+\vspace*{-6pt}
+\end{figure*}
+
+We are unable to show the~{$\cap$-shape} when the model prior is overdispersed though. We believe this is due to the misspecified model prior being uninformative and thus quickly ``corrected'' by the simulated data (which are generated from the correct data prior) to produce a posterior similar to the data prior. This observation suggests that SBC is not set up to detect such inconsistency, as it is not wrong to be uncertain on your initial belief.
+
+\subsection{Potential gaps}
+
+\begin{figure*}
+\vspace*{-7pt}
+\begin{center}
+\begin{subfigure}[t]{.48\textwidth}
+  \includegraphics[width=\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_underdispersed2.pdf}
+  \vspace*{-12pt}
+  \caption{$\beta \sim \mathcal{N}(0, 2^2)$}
+  \label{fig:sbc_linreg_underdispersed2}
+\end{subfigure}
+\hspace*{.001\textwidth}
+\begin{subfigure}[t]{.48\textwidth}
+  \includegraphics[width=\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_biased.pdf}
+  \vspace*{-12pt}
+  \caption{$\beta \sim \mathcal{N}(100, 10^2)$}
+  \label{fig:sbc_linreg_biased}
+\end{subfigure}
+\end{center}
+\vspace*{-7pt}
+\caption{The rank distributions under Simulation-Based Calibration (SBC) for all parameters, when one parameter of the prior used to build our posterior (model prior) is different to the one used to generate the data (data prior). We define the data generating process as that in Figure~\ref{fig:sbc_linreg_different_beta}, and modify the model prior by only changing the distribution of~$\beta$ as shown in the sub-captions. One would expect the histograms for $\alpha$ show the ranks are uniformly distributed, but that is not the case.}
+\label{fig:sbc_linreg_different}
+\end{figure*}
+
+While the results above appear to be promising, we also encounter a number of cases that indicate potential gaps in SBC. The gaps may prevent SBC to become a practically useful diagnostic tool, where we have ``automated diagnostics that can flag certain parameters for closer inspection''\citep{talts2018validating}. Further work is required to understand the underlying cause(s) and provide workaround(s).
+
+% Diagnostic plot can't tell which parameter is misspecified in a misspecified prior example. 
+We believe SBC may not be able to determine specifically which model parameter(s) is/are misspecified. One would expect that when we misspecify the model prior for one parameter, it would only affect the rank distribution associated to that parameter but not that of other parameters, so that we can focus our investigation on the misspecified parameter while leaving other ones alone. Figure~\ref{fig:sbc_linreg_different} shows this might not the case for the linear regression example: when we intentionally make the model prior for~$\beta$ underdispersed / biased, the rank distributions for~$\alpha$ also suggests underdispersion / bias in the data-averaged posterior.\footnote{It is worth noting that the rank distribution for $\alpha$ suggest the bias of the data-averaged posterior goes in the opposite direction than that of $\beta$, perhaps as an attempt by the model to compensate for the bias in~$\beta$.} The observation suggest SBC at its current form may flag too many false positives to be useful, and might lead to practitioners attempting to ``wrong a right'' while the true problem lies elsewhere.
+
+% Number of data points simulated can stablise the rank distribution, to the extent that the shape of the rank distribution is not clear given large number of data points simulated
+Moreover, we believe the detection power of SBC may be limited in applications where the model prior is misspecified and a large number of observed data are involved. This is based on the observation where increasing the number of data points ($y$) simulated when we obtain each rank sample appears to stabilise the rank distribution. The stabilisation effect is shown in Figure~\ref{fig:sbc_linreg_numX} using the linear regression example with different number of data points simulated per rank sample. This is concerning as any error introduced in model specification can be masked by such stabilisation, and more work is required to understand the effect's impact.
+
+\begin{figure*}
+\begin{center}
+\begin{subfigure}[t]{.24\textwidth}
+  \includegraphics[width=\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_numX_2_beta.pdf}
+  \vspace*{-12pt}
+  \caption{$s = 2$}
+  \label{fig:sbc_linreg_numX_2_beta}
+\end{subfigure}
+\hspace*{.001\textwidth}
+\begin{subfigure}[t]{.24\textwidth}
+  \includegraphics[width=\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_numX_10_beta.pdf}
+  \vspace*{-12pt}
+  \caption{$s = 10$}
+  \label{fig:sbc_linreg_numX_10_beta}
+\end{subfigure}
+\hspace*{.001\textwidth}
+\begin{subfigure}[t]{.24\textwidth}
+  \includegraphics[width=\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_numX_25_beta.pdf}
+  \vspace*{-12pt}
+  \caption{$s = 25$}
+  \label{fig:sbc_linreg_numX_25_beta}
+\end{subfigure}
+\hspace*{.001\textwidth}
+\begin{subfigure}[t]{.24\textwidth}
+  \includegraphics[width=\textwidth, trim=0 0 0 0, clip]{figures/sbc_linreg_numX_50_beta.pdf}
+  \vspace*{-12pt}
+  \caption{$s = 50$}
+  \label{fig:sbc_linreg_numX_50_beta}
+\end{subfigure}
+\end{center}
+\vspace*{-7pt}
+\caption{The rank distributions under Simulation-Based Calibration (SBC) for a misspecified parameter, when we vary the number of simulated data generated per rank sample ($s$). We define the data generating process as $\beta,\alpha \sim \mathcal{N}(0,10^2)$ and $y_{1:s} \sim \mathcal{N}(X\beta+\alpha,1.2^2)$, with $X$, a one-dimensional covariate, taking $s$ different values. We make $\beta$ underdispersed in the prior used to build our posterior by specifying $\beta \sim \mathcal{N}(0, 1^2)$. One can see as $s$ increase, the rank distribution converges to a uniform distribution.}
+\label{fig:sbc_linreg_numX}
+\end{figure*}
+
+% Exploit beta-binomial distributions to tell which type of error it is.
+Finally, we note the authors observing that global summaries are a natural but ineffective options, due to the fact that deviation from uniformity tends to occur in only a few systematic ways for rank distributions, as mentioned earlier. It will be interesting to see if a statistical test utilising beta-binomial distributions (the discrete version of the $\textrm{Beta}(\alpha, \beta)$ distribution) can step up to the task. In the case where the rank distribution is uniform, we should expect that $\alpha = \beta = 1$. Otherwise we should expect to see $\alpha \neq \beta$, $\alpha = \beta < 1$, and $\alpha = \beta > 1$ for biased, underdispersed, and overdispersed data-averaged posterior respectively, as compared to the true prior.
+
+
+
+\section{Pareto Smoothed Importance Sampling}
+Secondly, we introduce the Pareto Smoothed Importance Sampling (PSIS) diagnostic, which could be view as a post-adjustment for VI approximation \citep{2018arXiv180202538Y}. The best estimator $q(\theta | \phi^*)$, estimated by VI, is used as a proposal for importance sampling.
+
+\subsection{Importance sampling captures the divergence between the target and proposal}
+Using IS allows to harness the sampling weights' essence as a way to evaluate the closeness between the target and the proposal distribution. In our context the importance weights defines in~\ref{sec:is} are,
+\begin{align} \label{eq:importance_weights}
+    w_s = \frac{p(\theta_s,y)} {q(\theta_s | \phi^*)}
+\end{align}
+for $\theta_s \in \{\theta_1, ..., \theta_S\}$ evaluation of the proposal. They capture 'how close' the proposal is from the target. Intuitively, if $w_s$ is small, the two distributions are close at $\theta_s$. Conversely, large $w_s$ indicates a discrepancy at this point. If the later behavior is often observed, the importance weights distribution will be heavy-tailed and might have a few finite moments. The success of plain importance sampling depends entirely on how many moments the importance ratios $w_s$ possess. Especially, an IS estimator has finite variance if the second moments of the importance weights distribution is finite. The latter is also a necessary condition for the Lindeberg-Lévy central limit theorem to holds \citep{Koopman:2009aa}. However, the existence of the variance of the importance weights is by no means guaranteed. 
+
+\subsection{Using PSIS to estimate the number of existence moments of the importance weights}
+From the original idea of \citep{Koopman:2009aa}, revisited in \citep{Vehtari:2017aa} and \citep{2015arXiv150702646V}, a 'smoothing procedure' can be applied on the importance weights to estimate the number of existing moments of their distribution. Specially, the upper tail of the distribution is fitted with a Generalized Pareto distribution (GP). The GP density is,
+\begin{equation}
+    p(y |u, \sigma, k) = 
+\begin{cases}
+\frac{1} {\sigma} \big(1 + k (\frac{y - u} {\sigma}) \big)^{-\frac{1}{k} -1}, & k \neq 0 \\
+\frac{1} {\sigma} \,\textrm{exp} \big(\frac{y - u}{\sigma}\big), & k = 0
+\end{cases} 
+\end{equation}
+where $u$ is a lower bound parameter, $y$ is restricted to the range $(u, \infty)$, $\sigma \in \mathbb{R}^+$ is a non-negative scale parameter, and $k \in \mathbb{R}$ is an unconstrained shape parameter. Inference procedure fit the Pareto distribution for the $M$ largest sample defined in \citep{2015arXiv150702646V} as follow, 
+\begin{equation}
+    M = 
+\begin{cases}
+3\sqrt{S}, & S > 225, \\
+S/5, & S \leq 225.
+\end{cases} 
+\end{equation} 
+We fix parameter $u$ by restraining the weights with a lower bound and fit a GP to model the distribution of $w_s|w_s > u$. GP possesses the interesting property of having $\floor*{1/k}$ finite moments when $k > 0$. By examining the shape parameter of the fitted Pareto distribution, denoted $\hat{k}$, we can obtain sample-based estimates of the existence of the moments \citep{Koopman:2009aa}. Indeed, $\hat{k}$ approximates
+\begin{align}
+    k = \text{inf}\bigg\{k' < 0: E_q \Big[\Big(\frac {p(\theta|y)} {q(\theta|\phi^*)} \Big)^{1/k'} \Big] < \infty\bigg\}.
+\end{align}
+Note here that it is equivalent to use the conditional distribution because $p(y)$ is a constant. Having this estimate would allow us to infer whether the tails of the importance ratio are heavy, or equivalently if the target and the proposal distributions are close. Indeed, this concept is related to VI optimization as we can express the estimator in terms of divergence between the distributions. Taking the logarithm and discarding the constant, gives the Rényi divergence \citet{Renyia:1961},
+\begin{align}
+    k &= \text{inf}\bigg\{k' < 0: D_{1/k'}(p || q) < \infty\bigg\} \\
+    \text{where} \; D_{\alpha}(p || q) &= \frac{1}{\alpha - 1} \: log \int_{\Theta} p(\theta| y)^{\alpha} \: q(\theta | \phi^*)^{1 - \alpha} \: d \theta.
+\end{align}
+The Rényi divergence is monotonic increasing of order $\alpha$. That is, the divergence between the true posterior and VI approximation decreases with the existence of subsequent moments (i.e., $1/k$ decreases). When $k = 1$ (i.e., only the mean exist), (1) the Rényi divergence is equal to the KL divergence and (2) the divergence is infinite - we conclude that the approximation from VI is terrible. For other cases, \citet{Vehtari:2017aa} and \citet{2018arXiv180202538Y} have defined the following thresholds: 
+\begin{itemize}
+    \item $\hat{k} < 0.5$: The central limit theorem holds suggesting that PSIS converges at relatively quick rate $N^{1/2}$. The VI posterior approximation is close enough to the true posterior.
+    \item $0.5 < \hat{k} < 0.7$: The time until convergence is finite, indicating useful IS samples. The VI posterior approximation is not perfect but can be helpful.
+    \item $0.7 > \hat{k}$: IS samples should not be trusted with large weights dominating estimations. The VI posterior approximation is not good.
+\end{itemize}
+
+\subsection{Implementation on a linear regression}
+\citet{2018arXiv180202538Y} investigated VI estimation for linear regression under different tolerance levels for the optimisation. They showed that $\hat{k}$ can be viewed as a convergence test. In this report, we explore the behavior of the estimate under different priors under the linear regression framework presented in Section~\ref{sec:introduction}. We procede as follow: 
+\begin{enumerate}
+    \item We use {\fontfamily{qcr}\selectfont ADVI} (Automatic differentiation variational inference) from {\fontfamily{qcr}\selectfont stan} package \citep{2015arXiv150603431K} to approximate the posterior using VI. The algorithm automatically determines an appropriate variational family and optimizes the variational objective. The threshold of relative ELBO is set to a conservative value of $10^{-5}$ (default is $10^{-2}$) and $\eta$ to 0.05. The former produced the best results in \citet{2018arXiv180202538Y}.
+    \item We compute the importance sampling weights $w_s$ in~\eqref{eq:importance_weights} for $S = 5 \times 10^4$ posterior samples.
+    \item We fit the Generalized Pareto distribution with the {\fontfamily{qcr}\selectfont loo} package \citep{Vehtari:2017aa,2015arXiv150702646V} and obtain $\hat{k}$.
+    \item We compare the mean of the posterior evaluation to the the true posterior mean (that is tractable) by evaluating the Root Mean Square Error (RMSE).
+\end{enumerate}
+To account for the uncertainty of stochastic optimization and $\hat{k}$ estimation, simulations are repeated 50 times.
+The objective is to observe how VI behaves under different prior for $\beta$: (1) $\beta \sim \mathcal{N}(0,10)$, (2) $\beta \sim \mathcal{N}(0,2)$, (3) $\beta \sim \mathcal{N}(0,100)$, (4) $\beta \sim \mathcal{N}(100,10)$. The same prior on $\alpha$ is used, $\alpha \sim \mathcal{N}(0,10)$. Figure x-a shows $\hat{k}$ 95\% Credible interval under our four different priors. The dashed area represent the credible interval under evaluation of the true posterior.  Figure x-b presents The RMSE against $\hat{k}$ is computed in. We notice that ...
+Possibly:
+VI has lighter tails than the true posterior, and does not expand into territory where the posterior has little mass. Indeed, by observing the KL divergence in~\eqref{eq:kl},  the optimization penalize placing mass on q where p has little mass. 
+
+factorized variational
+approximation gives results
+that are too compact
+VI robust to mispecification of sd
+rmse increase with khat
+In the left panel, we see that VI is robust to mispecifcation...?
+The right panel shows $\hat{k}$ diagnoses estimation error, which eventually become negligible in PSIS adjustment when $\hat{k} < 0.7$. 
+
+\section{Calibrated Approximate Bayesian Inference}
+We now turn our attention to specific case where the goal is to compute a posterior-credible set for the parameter using an appromixation $\tilde{\pi}(\cdot|y)$. The use of an approximation will likely introduce some error into our estimate of a credible set. MCMC based methods only produce samples from the approximate posterior, meaning credible intervals must be approximated via Monte-Carlo sampling methods; This introduces a further source of bias. The goal of the paper is to estimate the bias in the coverage of a credible interval computed using these approximations compared to one computed using the true posterior.\\
+
+\subsection{Definition of the Problem}
+We define the exact $\alpha$-level credible set as the set $C_y$ such that:
+% TODO: change Chi for indicator...
+\begin{equation}
+	\alpha = \int_{\Omega} \chi_{\phi \in C_y} \pi(\phi | y) d\phi 
+\end{equation}
+%TODO: maybe delete this paragraph.
+The credible set covers the true parameter $\phi$ with probability $\alpha$ if $\phi$ is drawn from the prior, and the data really was generated using the observation model we have selected. \\
+Of course, in practice we usually do not have access to the true posterior nor can we compute exact credible sets. In such a situation one usually proceeds by J samples $\underline{\theta} = (\theta_1,\dots,\theta_J)$, $\theta_j \sim \tilde{\pi}(\cdot | y)$ and uses them to compute an estimate $\tilde{C}_y(\underline{\theta})$. The quantity we are interested in is the realised coverage of our approximate credible set (all Monte-Carlo error included), that is $c(y) := \mathbb{P}(\phi \in \tilde{C}_Y(\underline{\theta}) | Y=y)$.\\ \\
+We start by noticing the conditional distribution of $(\phi,\underline{\theta}|y)$ in the generative model is given by:
+\begin{equation}
+m(\phi,\underline{\theta} | y) = \pi(\phi|y) \tilde{\pi}(\underline{\theta}|y)
+\end{equation}
+writing $\tilde{\pi}(\underline{\theta}|y)$ for the joint distribution of $\underline{\theta} \in \Omega^J$. 
+We can use m to write $c(y)$ as an expectation:
+\begin{equation}
+c(y) = \int_{\Omega^J}\int_{\Omega} \chi_{\phi \in \tilde{C}_Y(\underline{\theta})}m(\phi,\underline{\theta}|y) d\phi d\underline{\theta}
+\end{equation}
+This expectation involves the true posterior, something we do not have access to. However we can estimate expectations with respect to densities we know up to a normalizing constant using monte-carlo methods (recall we have access to the likelihood and prior).
+\subsection{Annealed Importance Sampling}
+The method of Annealed Importance Sampling (AIS) merges the ideas of MCMC and Simulated Annealing. A motivating example for AIS is the case where the posterior density is multimodal. If the modes are sparse and peaked, traditional MCMC algorithms may stay within the mode they are initialized closest to and hence will not provide accurate samples. The idea of annealed importance sampling is to 'melt' the distribution, redistributing mass across the outcome space allowing for easier exploration.
+
+Suppose the goal is to sample from a distribution $p_0 (x)$. We define a sequence of annealed distributions $p_j (x) \propto p_0 (x)^{\beta_j}$, $1=\beta_0>\dots>\beta_n$. On such a distribution, moves proposed by an MCMC algorithm that take the chain away from a given mode are much more likely to be accepted. On each iteration of the algorithm we start at $p_n(x)$ and work backwards. The algorithm runs an MCMC chain targetting $p_j(x)$ for a number of steps, using the final state of the $j^{th}$ chain as the initial state of the $(j-1)^{th}$ chain. Starting with $p_n(x)$ we progressively decreases the temperature, concentrating the probability mass again around the modes and ending up back at $p_0(x)$, the real target. 
+
+To make it explicit: the algorithm runs a chain targetting each $p_j(x)$ for $j=n,\dots,0$ to produce a \textit{single sample}, and we repeat this whole procedure many times to produce a set of samples. If we run this procedure several times, due to the easier exploration in the early phases we expect to see the final chains finish at different points across the sample space, for example in distinct modes, and hence overall better mixing.
+
+\subsection{Computing the Approximate Coverage}
+%%%
+%This will usually not have the correct coverage for $\phi$ and hence we can define the realised coverage as:
+%
+%\begin{equation}
+%c(y) = \int_{\Omega} \chi_{\phi \in \tilde{C}_y(\underline{\theta})} \tilde{\pi}(\phi | y) d\phi 
+%\end{equation}
+
+\section{Conclusion}
+
+We investigate a number of diagnostics tools designed to detect misspecified models and errorness computation in implementation of Bayesian algorithms. They include Simulation Based Calibration, Pareto Smoothed Importance Sampling, and Calibrated Approximate Bayesian Inference. We are able to reproduce a number of key result presented in the original works while encountering a number of edge cases using a simple Bayesian linear regression example. Further work is required to understand the underlying causes for these edge cases, and if any workaround is required and/or exists.
+
+%%%%%%%%%%%%%%%%%%%%%%
+%%%  BIBLIOGRAPHY  %%%
+%%%%%%%%%%%%%%%%%%%%%%
+\bibliographystyle{agsm}
+\bibliography{bibliography.bib}
+
+%%%%%%%%%%%%%%%%%%
+%%%  APPENDIX  %%%
+%%%%%%%%%%%%%%%%%%
+
+\vspace{1cm}
+
+{\Large \textbf{Appendix}}
+\appendix
+\section{Self-consistency of the data-averaged posterior and the prior}
+
+In this section, we provide a step-by-step derivation of the self-consistency property of the data-averaged posterior and the prior, as described in \citep{cook2006validation} and \citep{talts2018validating}.
+The authors observed that integrating the exact posterior~$\pi(\cdot|y)$ over all priors $\phi \sim \pi(\cdot)$ and their associated likelihood $y \sim \pi(\cdot | \phi)$ (i.e. all possible ground truths) returns the prior distribution:
+\begin{align}
+    \pi(\theta) = \int \pi(\theta|y) p(y|\phi) \pi(\phi) \,\textrm{d}y \,\textrm{d}\phi 
+    \label{eq:talts_self_consistency}
+\end{align}
+
+We begin the derivation from the RHS, applying Bayes' theorem to the first two terms we have
+\begin{align}
+    \int \frac{p(y|\theta) \pi(\theta)}{p(y)} \frac{\pi(\phi|y) p(y)}{\pi(\phi)} \pi(\phi) \,\textrm{d}y \,\textrm{d}\phi .
+\end{align}
+Note the $\pi(\phi)$s and the $p(y)$s cancel, and we can rearrange the terms to obtain
+\begin{align}
+    \int \pi(\theta|y) p(y|\phi) \pi(\phi) \,\textrm{d}y \,\textrm{d}\phi,
+\end{align}
+which is the joint distribution of $\theta$, $y$ and $\phi$:
+\begin{align}
+    \int \pi(\theta, y, \phi) \,\textrm{d}y \,\textrm{d}\phi.
+\end{align}
+Integrating over $\phi$ and $y$ we obtain the marginal as~$\pi(\theta)$, which is the LHS of Equation \eqref{eq:talts_self_consistency}.
+
+
+
+
+
+
+
+
+
+
+
+
+\end{document}
